@@ -1,0 +1,26 @@
+{
+  "name": "wpp-countdown-bot",
+  "version": "1.0.0",
+  "description": "Bot de WhatsApp para cuentas regresivas con comando /temp por grupo",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "countdown",
+    "temporizador"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.19",
+    "dayjs": "^1.11.13",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
