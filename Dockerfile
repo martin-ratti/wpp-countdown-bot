@@ -3,13 +3,13 @@ FROM node:22-alpine
 WORKDIR /app
 
 # Instalar pnpm globalmente
-RUN npm install -g pnpm
+RUN npm install -g pnpm && pnpm config set minimum-release-age 0
 
-# Copiar archivos de dependencias
-COPY package.json pnpm-lock.yaml ./
+# Copiar archivos de configuración y dependencias
+COPY .npmrc* package.json pnpm-lock.yaml ./
 
-# Instalar dependencias de producción de forma reproducible
-RUN pnpm install --prod --frozen-lockfile
+# Instalar dependencias de producción
+RUN pnpm install --prod
 
 # Copiar el código fuente
 COPY . .

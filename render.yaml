@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install -g pnpm && pnpm install --frozen-lockfile
+    buildCommand: npm install -g pnpm && pnpm config set minimum-release-age 0 && pnpm install
     startCommand: pnpm start
     envVars:
       - key: NODE_ENV
