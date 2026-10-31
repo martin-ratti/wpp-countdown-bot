@@ -1,6 +1,6 @@
 /**
  * Parsea una cadena de texto para extraer fecha, hora y nombre de evento.
- * Acepta formatos como:
+ * Formatos aceptados:
  * - "25/12/2026 20:30 Fiesta de Fin de Año"
  * - "25/12/2026 Navidad" (asume 00:00 hs)
  * - "25-12-2026 20:30 Fiesta"
@@ -56,6 +56,14 @@ export function parseEventInput(text) {
     return {
       valid: false,
       error: 'Debes ingresar un nombre para el evento después de la fecha/hora.\nEjemplo: */set 25/12/2026 21:00 Asado*'
+    };
+  }
+
+  // Validación de longitud máxima (Seguridad contra ReDoS/Memoria)
+  if (name.length > 80) {
+    return {
+      valid: false,
+      error: `El nombre del evento es demasiado largo (${name.length} caracteres). El máximo permitido es 80 caracteres.`
     };
   }
 
@@ -153,15 +161,16 @@ export function formatDuration({ days, hours, minutes, seconds }) {
 
 /**
  * Construye el mensaje completo de respuesta para el comando /temp
- * @param {{ name: string, targetIso: string, formattedDate: string } | null} event
+ * @param {{ id?: number, name: string, targetIso: string, formattedDate: string } | null} event
  * @param {Date} [now=new Date()]
+ * @param {number} [totalEvents=1]
  * @returns {string}
  */
-export function buildTempResponse(event, now = new Date()) {
+export function buildTempResponse(event, now = new Date(), totalEvents = 1) {
   if (!event) {
     return (
-      'ℹ️ *No hay ningún evento configurado en este grupo.*\n\n' +
-      'Podés configurar uno con:\n' +
+      'ℹ️ *No hay ningún evento activo en este grupo.*\n\n' +
+      'Podés crear uno con:\n' +
       '👉 */set DD/MM/AAAA HH:mm Nombre del evento*\n' +
       'Ejemplo: */set 31/12/2026 23:59 Fin de Año*'
     );
@@ -169,20 +178,68 @@ export function buildTempResponse(event, now = new Date()) {
 
   const { isPast, days, hours, minutes, seconds } = getRemainingTime(event.targetIso, now);
 
+  const eventTitle = event.id ? `[#${event.id}] ${event.name}` : event.name;
+
   if (isPast) {
     const elapsedText = formatDuration({ days, hours, minutes, seconds });
     return (
-      `🎉 ¡El evento *${event.name}* ya se cumplió!\n` +
+      `🎉 ¡El evento *${eventTitle}* ya se cumplió!\n` +
       `📅 Fecha programada: ${event.formattedDate}\n` +
       `⏱️ Pasó hace: *${elapsedText}*.\n\n` +
-      `Para crear una nueva cuenta regresiva usa */set DD/MM/AAAA HH:mm Nombre*.`
+      `Podés ver los demás con */eventos* o agregar uno con */set*.`
     );
   }
 
   const remainingText = formatDuration({ days, hours, minutes, seconds });
-  return (
-    `⏳ *Cuenta Regresiva: ${event.name}*\n\n` +
+  let msg =
+    `⏳ *Cuenta Regresiva: ${eventTitle}*\n\n` +
     `Faltan: *${remainingText}*\n` +
-    `📅 Fecha objetivo: ${event.formattedDate}`
-  );
+    `📅 Fecha objetivo: ${event.formattedDate}`;
+
+  if (totalEvents > 1) {
+    msg += `\n\n💡 _Hay ${totalEvents} eventos registrados. Usá */eventos* para ver la lista completa._`;
+  }
+
+  return msg;
+}
+
+/**
+ * Construye la lista de eventos para el comando /eventos
+ * @param {Array<{ id: number, name: string, targetIso: string, formattedDate: string }>} events
+ * @param {Date} [now=new Date()]
+ * @returns {string}
+ */
+export function buildEventsListResponse(events, now = new Date()) {
+  if (!events || events.length === 0) {
+    return (
+      'ℹ️ *No hay eventos registrados en este grupo.*\n\n' +
+      'Para registrar uno, usa:\n' +
+      '👉 */set DD/MM/AAAA HH:mm Nombre del evento*'
+    );
+  }
+
+  const numberEmojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+
+  let text = `📅 *LISTA DE EVENTOS DEL GRUPO (${events.length})*\n\n`;
+
+  events.forEach((evt, idx) => {
+    const numIcon = idx < numberEmojis.length ? numberEmojis[idx] : `#${evt.id}`;
+    const { isPast, days, hours, minutes, seconds } = getRemainingTime(evt.targetIso, now);
+
+    text += `${numIcon} *${evt.name}*\n`;
+    text += `   📅 ${evt.formattedDate}\n`;
+
+    if (isPast) {
+      text += `   ✅ _Ya finalizó hace ${formatDuration({ days, hours, minutes, seconds })}_\n\n`;
+    } else {
+      text += `   ⏳ _Faltan ${formatDuration({ days, hours, minutes, seconds })}_\n\n`;
+    }
+  });
+
+  text += `💡 *Comandos útiles:*\n`;
+  text += `• */temp [número o nombre]* para ver uno en detalle\n`;
+  text += `• */deltemp [número]* para borrar un evento específico\n`;
+  text += `• */cleartemp* para borrar todos los eventos del grupo`;
+
+  return text;
 }

@@ -9,13 +9,17 @@ import qrcode from 'qrcode-terminal';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseEventInput, buildTempResponse } from './countdown.js';
-import { getEvent, setEvent, removeEvent } from './storage.js';
+import { parseEventInput, buildTempResponse, buildEventsListResponse } from './countdown.js';
+import { getEvents, addEvent, findEvent, removeEvent, clearAllEvents } from './storage.js';
 
 const makeWASocket = baileys.default || baileys;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const AUTH_DIR = path.resolve(__dirname, '../auth_info');
+
+// Rate limiting anti-spam (3 segundos de cooldown por chat)
+const COOLDOWN_MS = 3000;
+const lastCommandTime = new Map();
 
 /**
  * Desenvuelve mensajes anidados (efímeros, viewOnce, con multimedia, etc.)
@@ -56,7 +60,6 @@ async function startBot() {
   const { version } = await fetchLatestBaileysVersion();
   const logger = pino({ level: 'silent' });
 
-  // Usamos makeCacheableSignalKeyStore para evitar el error de "Bad MAC" por colisiones de I/O en disco
   const sock = makeWASocket({
     version,
     logger,
@@ -65,7 +68,7 @@ async function startBot() {
       keys: makeCacheableSignalKeyStore(state.keys, logger)
     },
     printQRInTerminal: false,
-    syncFullHistory: false, // Evita saturar la sesión descargando gigabytes de chats viejos
+    syncFullHistory: false,
     generateHighQualityLinkPreview: false,
     getMessage: async () => ({ conversation: '' })
   });
@@ -98,7 +101,7 @@ async function startBot() {
       console.log('\n======================================================');
       console.log('✅ ¡BOT CONECTADO CON ÉXITO A WHATSAPP!');
       console.log('Esperando comandos en chats y grupos...');
-      console.log('Comandos listos: /temp, /set, /cleartemp, /ayuda');
+      console.log('Comandos listos: /temp, /eventos, /set, /deltemp, /cleartemp, /ayuda');
       console.log('======================================================\n');
     }
   });
@@ -120,30 +123,61 @@ async function startBot() {
       const command = commandRaw.toLowerCase();
       const rawArgs = text.slice(commandRaw.length).trim();
 
-      const senderType = msg.key.fromMe ? 'Vos (tu teléfono)' : 'Otro usuario';
-      console.log(`\n📩 [MENSAJE RECIBIDO] de: ${senderType} | Chat: ${chatId}`);
-      console.log(`   Comando: "${command}" | Argumentos: "${rawArgs}"`);
+      // Control de Anti-Spam / Rate-Limiting por chat
+      const now = Date.now();
+      const lastTime = lastCommandTime.get(chatId) || 0;
+      if (now - lastTime < COOLDOWN_MS) {
+        console.log(`🛡️ [ANTI-SPAM] Cooldown activo en ${chatId}. Comando "${command}" ignorado para proteger la cuenta.`);
+        continue;
+      }
+      lastCommandTime.set(chatId, now);
 
-      // 1. Comando /temp
+      const senderType = msg.key.fromMe ? 'Vos' : 'Otro usuario';
+      console.log(`\n📩 [MENSAJE RECIBIDO] de: ${senderType} | Chat: ${chatId}`);
+      console.log(`   Comando: "${command}" | Args: "${rawArgs}"`);
+
+      // 1. Comando /temp [número o nombre opcional]
       if (command === '/temp' || command === '!temp') {
-        const event = getEvent(chatId);
-        const replyText = buildTempResponse(event);
+        const events = getEvents(chatId);
+        const event = findEvent(chatId, rawArgs);
+
+        if (!event && rawArgs) {
+          await sock.sendMessage(
+            chatId,
+            { text: `⚠️ No se encontró ningún evento con el nombre o número "*${rawArgs}*". Usá */eventos* para ver la lista.` },
+            { quoted: msg }
+          );
+          console.log(`📤 [RESPUESTA] Evento no encontrado para "${rawArgs}".`);
+          continue;
+        }
+
+        const replyText = buildTempResponse(event, new Date(), events.length);
         await sock.sendMessage(chatId, { text: replyText }, { quoted: msg });
-        console.log(`📤 [RESPUESTA ENVIADA] Cuenta regresiva enviada al chat.`);
+        console.log(`📤 [RESPUESTA] Cuenta regresiva enviada.`);
         continue;
       }
 
-      // 2. Comando /set
+      // 2. Comando /eventos o /events (Lista de múltiples eventos)
+      if (command === '/eventos' || command === '!eventos' || command === '/events' || command === '!events') {
+        const events = getEvents(chatId);
+        const replyText = buildEventsListResponse(events);
+        await sock.sendMessage(chatId, { text: replyText }, { quoted: msg });
+        console.log(`📤 [RESPUESTA] Lista de ${events.length} eventos enviada.`);
+        continue;
+      }
+
+      // 3. Comando /set (Agregar evento)
       if (command === '/set' || command === '!set') {
         if (!rawArgs) {
           const helpMsg =
             'ℹ️ *Uso del comando /set:*\n\n' +
             '👉 */set DD/MM/AAAA HH:mm Nombre del evento*\n\n' +
             '*Ejemplos:*\n' +
-            '• `/set 25/12/2026 21:00 Fiesta de Navidad`\n' +
-            '• `/set 31/12/2026 Fin de Año`';
+            '• `/set 15/11/2026 21:00 Cumple de Lucas`\n' +
+            '• `/set 20/11/2026 20:00 Asado de fin de año`\n\n' +
+            '_Podés registrar múltiples eventos y verlos todos con /eventos._';
           await sock.sendMessage(chatId, { text: helpMsg }, { quoted: msg });
-          console.log(`📤 [RESPUESTA ENVIADA] Instrucciones de /set enviadas.`);
+          console.log(`📤 [RESPUESTA] Instrucciones de /set enviadas.`);
           continue;
         }
 
@@ -155,7 +189,7 @@ async function startBot() {
         }
 
         const sender = msg.key.participant || msg.key.remoteJid;
-        const saved = setEvent(chatId, {
+        const { event: saved, total } = addEvent(chatId, {
           name: parseResult.name,
           targetIso: parseResult.targetIso,
           formattedDate: parseResult.formattedDate,
@@ -163,54 +197,97 @@ async function startBot() {
         });
 
         const successMsg =
-          `✅ *¡Evento configurado con éxito!*\n\n` +
+          `✅ *¡Evento agregado con éxito!* (#${saved.id})\n\n` +
           `📌 *Evento:* ${saved.name}\n` +
           `📅 *Fecha y hora:* ${saved.formattedDate}\n\n` +
-          `💡 Podés consultar cuánto falta en cualquier momento enviando */temp*.`;
+          `💡 Hay *${total} evento(s)* en este grupo.\n` +
+          `• Usá */eventos* para ver la lista completa.\n` +
+          `• Usá */temp* para consultar el más próximo.`;
 
         await sock.sendMessage(chatId, { text: successMsg }, { quoted: msg });
-        console.log(`📤 [RESPUESTA ENVIADA] Evento "${saved.name}" configurado para ${saved.formattedDate}.`);
+        console.log(`📤 [RESPUESTA] Evento "${saved.name}" (#${saved.id}) guardado.`);
         continue;
       }
 
-      // 3. Comando /cleartemp o /deltemp
-      if (command === '/cleartemp' || command === '!cleartemp' || command === '/deltemp') {
-        const removed = removeEvent(chatId);
-        if (removed) {
+      // 4. Comando /deltemp [número o nombre] (Eliminar evento específico)
+      if (command === '/deltemp' || command === '!deltemp') {
+        if (!rawArgs) {
           await sock.sendMessage(
             chatId,
-            { text: '🗑️ *Cuenta regresiva eliminada.* Ya no hay ningún evento configurado en este grupo.' },
+            { text: 'ℹ️ Indica qué evento querés borrar:\n👉 */deltemp [número o nombre]*\nEjemplo: `/deltemp 1` o `/deltemp Lucas`\n\nUsá */eventos* para ver los números.' },
             { quoted: msg }
           );
-          console.log(`📤 [RESPUESTA ENVIADA] Evento eliminado del chat.`);
+          continue;
+        }
+
+        const result = removeEvent(chatId, rawArgs);
+        if (result.success) {
+          await sock.sendMessage(
+            chatId,
+            { text: `🗑️ *Evento eliminado:* "${result.removed.name}".\nQuedan *${result.remainingCount} evento(s)* en el grupo.` },
+            { quoted: msg }
+          );
+          console.log(`📤 [RESPUESTA] Evento "${result.removed.name}" eliminado.`);
         } else {
           await sock.sendMessage(
             chatId,
-            { text: 'ℹ️ No había ningún evento configurado en este grupo.' },
+            { text: `⚠️ No se encontró ningún evento que coincida con "*${rawArgs}*". Usá */eventos* para verificar.` },
             { quoted: msg }
           );
-          console.log(`📤 [RESPUESTA ENVIADA] Aviso de que no había evento activo.`);
         }
         continue;
       }
 
-      // 4. Comando /ayuda o /help
+      // 5. Comando /cleartemp (Eliminar todos los eventos del grupo)
+      if (command === '/cleartemp' || command === '!cleartemp') {
+        const removed = clearAllEvents(chatId);
+        if (removed) {
+          await sock.sendMessage(
+            chatId,
+            { text: '🗑️ *Todos los eventos fueron eliminados.* Ya no hay cuentas regresivas activas en este grupo.' },
+            { quoted: msg }
+          );
+          console.log(`📤 [RESPUESTA] Todos los eventos eliminados.`);
+        } else {
+          await sock.sendMessage(
+            chatId,
+            { text: 'ℹ️ No había ningún evento registrado en este grupo.' },
+            { quoted: msg }
+          );
+        }
+        continue;
+      }
+
+      // 6. Comando /ayuda o /help
       if (command === '/ayuda' || command === '!ayuda' || command === '/help' || command === '!help') {
         const helpText =
           `🤖 *BOT DE CUENTA REGRESIVA - COMANDOS*\n\n` +
-          `⏳ */temp* - Muestra cuánto falta para el evento de este grupo.\n\n` +
-          `📅 */set DD/MM/AAAA HH:mm Nombre* - Configura un nuevo evento.\n` +
-          `   _Ej: /set 25/12/2026 21:00 Asado con amigos_\n\n` +
-          `🗑️ */cleartemp* - Borra el evento actual del grupo.\n\n` +
-          `❓ */ayuda* - Muestra este mensaje de ayuda.`;
+          `⏳ */temp* - Muestra cuánto falta para el próximo evento.\n` +
+          `⏳ */temp [número o nombre]* - Cuenta regresiva de un evento específico.\n\n` +
+          `📋 */eventos* - Lista todos los eventos del grupo ordenados por fecha.\n\n` +
+          `📅 */set DD/MM/AAAA HH:mm Nombre* - Agrega un nuevo evento.\n` +
+          `   _Ej: /set 15/11/2026 21:00 Cumple de Lucas_\n\n` +
+          `🗑️ */deltemp [número o nombre]* - Elimina un evento específico.\n` +
+          `🗑️ */cleartemp* - Borra todos los eventos del grupo.\n\n` +
+          `❓ */ayuda* - Muestra este menú.`;
 
         await sock.sendMessage(chatId, { text: helpText }, { quoted: msg });
-        console.log(`📤 [RESPUESTA ENVIADA] Menú de ayuda enviado.`);
+        console.log(`📤 [RESPUESTA] Menú de ayuda enviado.`);
         continue;
       }
     }
   });
 }
+
+// Cierre graceful
+process.on('SIGTERM', () => {
+  console.log('Recibida señal SIGTERM. Apagando bot limpiamente...');
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  console.log('Recibida señal SIGINT. Apagando bot limpiamente...');
+  process.exit(0);
+});
 
 // Iniciar el bot
 startBot().catch((err) => {
