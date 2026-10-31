@@ -121,7 +121,7 @@ async function startBot() {
       console.log('\n======================================================');
       console.log('✅ ¡BOT CONECTADO CON ÉXITO A WHATSAPP!');
       console.log('Esperando comandos en chats y grupos...');
-      console.log('Control de activación: /activar o /bot on (Solo dueño)');
+      console.log('Modo Sigilo activo: /activar o /bot on (Solo el dueño)');
       console.log('======================================================\n');
     }
   });
@@ -151,20 +151,16 @@ async function startBot() {
         (botNumber && sender.startsWith(botNumber))
       );
 
-      // 1. COMANDOS DE ACTIVACIÓN / CONTROL DE ACCESO (Exclusivo para el Dueño)
+      // 1. COMANDOS DE ACTIVACIÓN / CONTROL DE ACCESO (Modo Sigilo / Stealth)
       if (
         command === '/activar' ||
         command === '!activar' ||
         (command === '/bot' && rawArgs.toLowerCase() === 'on') ||
         (command === '!bot' && rawArgs.toLowerCase() === 'on')
       ) {
+        // Si no es el dueño, falla silenciosamente sin responder nada para no delatar la existencia del bot
         if (!isOwner) {
-          await sock.sendMessage(
-            chatId,
-            { text: '⚠️ *Acceso denegado.* Solo el dueño del bot puede activar este chat.' },
-            { quoted: msg }
-          );
-          console.log(`⛔ [ACCESO DENEGADO] Intento de activación no autorizado en ${chatId}`);
+          console.log(`🤫 [MODO SIGILO] Intento de activación no autorizado en ${chatId} ignorado en silencio.`);
           continue;
         }
 
@@ -188,13 +184,9 @@ async function startBot() {
         (command === '/bot' && rawArgs.toLowerCase() === 'off') ||
         (command === '!bot' && rawArgs.toLowerCase() === 'off')
       ) {
+        // Si no es el dueño, falla silenciosamente
         if (!isOwner) {
-          await sock.sendMessage(
-            chatId,
-            { text: '⚠️ *Acceso denegado.* Solo el dueño del bot puede desactivar este chat.' },
-            { quoted: msg }
-          );
-          console.log(`⛔ [ACCESO DENEGADO] Intento de desactivación no autorizado en ${chatId}`);
+          console.log(`🤫 [MODO SIGILO] Intento de desactivación no autorizado en ${chatId} ignorado en silencio.`);
           continue;
         }
 
@@ -208,7 +200,7 @@ async function startBot() {
       // FILTRO DE SEGURIDAD / WHITELIST:
       // Si el chat NO fue activado previamente por el dueño, ignorar silenciosamente
       if (!isChatActive(chatId)) {
-        console.log(`🔒 [IGNORADO] Chat ${chatId} no está activado. Comando "${command}" descartado.`);
+        console.log(`🔒 [IGNORADO] Chat ${chatId} no está activado. Comando "${command}" descartado en silencio.`);
         continue;
       }
 
