@@ -1,3 +1,4 @@
+import http from 'node:http';
 import baileys, {
   DisconnectReason,
   useMultiFileAuthState,
@@ -16,6 +17,16 @@ const makeWASocket = baileys.default || baileys;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const AUTH_DIR = path.resolve(__dirname, '../auth_info');
+
+// Servidor HTTP ligero para compatibilidad con el tier gratuito de Render (Web Service)
+const PORT = process.env.PORT || 3000;
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('🤖 Bot de WhatsApp Cuenta Regresiva activo y funcionando.');
+});
+server.listen(PORT, () => {
+  console.log(`🌐 Servidor de monitoreo activo en el puerto ${PORT}`);
+});
 
 // Rate limiting anti-spam (3 segundos de cooldown por chat)
 const COOLDOWN_MS = 3000;
@@ -127,7 +138,7 @@ async function startBot() {
       const now = Date.now();
       const lastTime = lastCommandTime.get(chatId) || 0;
       if (now - lastTime < COOLDOWN_MS) {
-        console.log(`🛡️ [ANTI-SPAM] Cooldown activo en ${chatId}. Comando "${command}" ignorado para proteger la cuenta.`);
+        console.log(`🛡️ [ANTI-SPAM] Cooldown activo en ${chatId}. Comando "${command}" ignorado.`);
         continue;
       }
       lastCommandTime.set(chatId, now);
@@ -144,7 +155,7 @@ async function startBot() {
         if (!event && rawArgs) {
           await sock.sendMessage(
             chatId,
-            { text: `⚠️ No se encontró ningún evento con el nombre o número "*${rawArgs}*". Usá */eventos* para ver la lista.` },
+            { text: `⚠️ No se encontró ningún evento que coincida con "*${rawArgs}*". Usá */eventos* para ver la lista completa.` },
             { quoted: msg }
           );
           console.log(`📤 [RESPUESTA] Evento no encontrado para "${rawArgs}".`);
@@ -157,7 +168,7 @@ async function startBot() {
         continue;
       }
 
-      // 2. Comando /eventos o /events (Lista de múltiples eventos)
+      // 2. Comando /eventos o /events (Lista completa de eventos)
       if (command === '/eventos' || command === '!eventos' || command === '/events' || command === '!events') {
         const events = getEvents(chatId);
         const replyText = buildEventsListResponse(events);
@@ -166,7 +177,7 @@ async function startBot() {
         continue;
       }
 
-      // 3. Comando /set (Agregar evento)
+      // 3. Comando /set (Agregar nuevo evento)
       if (command === '/set' || command === '!set') {
         if (!rawArgs) {
           const helpMsg =
@@ -174,8 +185,9 @@ async function startBot() {
             '👉 */set DD/MM/AAAA HH:mm Nombre del evento*\n\n' +
             '*Ejemplos:*\n' +
             '• `/set 15/11/2026 21:00 Cumple de Lucas`\n' +
-            '• `/set 20/11/2026 20:00 Asado de fin de año`\n\n' +
-            '_Podés registrar múltiples eventos y verlos todos con /eventos._';
+            '• `/set 20/11/2026 Asado` _(sin hora asume 00:00 hs)_\n\n' +
+            '📝 _Máximo 80 caracteres para el nombre._\n' +
+            '💡 _Podés registrar múltiples eventos y verlos todos con */eventos*._';
           await sock.sendMessage(chatId, { text: helpMsg }, { quoted: msg });
           console.log(`📤 [RESPUESTA] Instrucciones de /set enviadas.`);
           continue;
@@ -197,12 +209,12 @@ async function startBot() {
         });
 
         const successMsg =
-          `✅ *¡Evento agregado con éxito!* (#${saved.id})\n\n` +
+          `✅ *¡Evento registrado con éxito!* (#${saved.id})\n\n` +
           `📌 *Evento:* ${saved.name}\n` +
           `📅 *Fecha y hora:* ${saved.formattedDate}\n\n` +
           `💡 Hay *${total} evento(s)* en este grupo.\n` +
           `• Usá */eventos* para ver la lista completa.\n` +
-          `• Usá */temp* para consultar el más próximo.`;
+          `• Usá */temp* para ver el tiempo del próximo evento.`;
 
         await sock.sendMessage(chatId, { text: successMsg }, { quoted: msg });
         console.log(`📤 [RESPUESTA] Evento "${saved.name}" (#${saved.id}) guardado.`);
@@ -214,7 +226,7 @@ async function startBot() {
         if (!rawArgs) {
           await sock.sendMessage(
             chatId,
-            { text: 'ℹ️ Indica qué evento querés borrar:\n👉 */deltemp [número o nombre]*\nEjemplo: `/deltemp 1` o `/deltemp Lucas`\n\nUsá */eventos* para ver los números.' },
+            { text: 'ℹ️ Indicá qué evento querés borrar:\n👉 */deltemp [número o nombre]*\n\n*Ejemplos:*\n• `/deltemp 1`\n• `/deltemp Lucas`\n\nUsá */eventos* para ver los números de cada uno.' },
             { quoted: msg }
           );
           continue;
@@ -224,14 +236,14 @@ async function startBot() {
         if (result.success) {
           await sock.sendMessage(
             chatId,
-            { text: `🗑️ *Evento eliminado:* "${result.removed.name}".\nQuedan *${result.remainingCount} evento(s)* en el grupo.` },
+            { text: `🗑️ *Evento eliminado:* "${result.removed.name}".\nQuedan *${result.remainingCount} evento(s)* activos en el grupo.` },
             { quoted: msg }
           );
           console.log(`📤 [RESPUESTA] Evento "${result.removed.name}" eliminado.`);
         } else {
           await sock.sendMessage(
             chatId,
-            { text: `⚠️ No se encontró ningún evento que coincida con "*${rawArgs}*". Usá */eventos* para verificar.` },
+            { text: `⚠️ No se encontró ningún evento con "*${rawArgs}*". Consultá la lista con */eventos*.` },
             { quoted: msg }
           );
         }
@@ -258,21 +270,30 @@ async function startBot() {
         continue;
       }
 
-      // 6. Comando /ayuda o /help
+      // 6. Comando /ayuda o /help (Menú de ayuda completo y actualizado)
       if (command === '/ayuda' || command === '!ayuda' || command === '/help' || command === '!help') {
         const helpText =
-          `🤖 *BOT DE CUENTA REGRESIVA - COMANDOS*\n\n` +
-          `⏳ */temp* - Muestra cuánto falta para el próximo evento.\n` +
-          `⏳ */temp [número o nombre]* - Cuenta regresiva de un evento específico.\n\n` +
-          `📋 */eventos* - Lista todos los eventos del grupo ordenados por fecha.\n\n` +
-          `📅 */set DD/MM/AAAA HH:mm Nombre* - Agrega un nuevo evento.\n` +
-          `   _Ej: /set 15/11/2026 21:00 Cumple de Lucas_\n\n` +
-          `🗑️ */deltemp [número o nombre]* - Elimina un evento específico.\n` +
-          `🗑️ */cleartemp* - Borra todos los eventos del grupo.\n\n` +
-          `❓ */ayuda* - Muestra este menú.`;
+          `🤖 *BOT DE CUENTA REGRESIVA - GUÍA DE COMANDOS*\n\n` +
+          `⏳ */temp*\n` +
+          `   _Muestra cuánto falta para el evento más cercano._\n\n` +
+          `⏳ */temp [número o nombre]*\n` +
+          `   _Cuenta regresiva de un evento específico._\n` +
+          `   _Ej: /temp 2  o  /temp Lucas_\n\n` +
+          `📋 */eventos*\n` +
+          `   _Muestra la lista de todos los eventos del grupo ordenados cronológicamente._\n\n` +
+          `📅 */set DD/MM/AAAA HH:mm Nombre*\n` +
+          `   _Agrega un nuevo evento al grupo._\n` +
+          `   _Ej: /set 15/11/2026 21:00 Cumple de Lucas_\n` +
+          `   _Nota: Si no ponés hora, asume 00:00 hs (máx. 80 caracteres)._\n\n` +
+          `🗑️ */deltemp [número o nombre]*\n` +
+          `   _Elimina un evento específico._\n` +
+          `   _Ej: /deltemp 1  o  /deltemp Lucas_\n\n` +
+          `🗑️ */cleartemp*\n` +
+          `   _Elimina todos los eventos del grupo actual._\n\n` +
+          `🛡️ _Protección anti-spam: Cooldown de 3 segundos entre comandos._`;
 
         await sock.sendMessage(chatId, { text: helpText }, { quoted: msg });
-        console.log(`📤 [RESPUESTA] Menú de ayuda enviado.`);
+        console.log(`📤 [RESPUESTA] Menú de ayuda actualizado enviado.`);
         continue;
       }
     }

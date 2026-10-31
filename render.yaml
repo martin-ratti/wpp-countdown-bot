@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: wpp-countdown-bot
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install -g pnpm && pnpm install --frozen-lockfile
+    startCommand: pnpm start
+    envVars:
+      - key: NODE_ENV
+        value: production
