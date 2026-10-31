@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@whiskeysockets/baileys':
-        specifier: ^6.7.24
+        specifier: 6.7.24
         version: 6.7.24(audio-decode@2.2.3)(sharp@0.35.5)
       dayjs:
         specifier: ^1.11.13

@@ -18,9 +18,15 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.24",
+    "@whiskeysockets/baileys": "6.7.24",
     "dayjs": "^1.11.13",
     "pino": "^9.6.0",
     "qrcode-terminal": "^0.12.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@whiskeysockets/baileys",
+      "protobufjs"
+    ]
   }
 }
