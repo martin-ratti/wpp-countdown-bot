@@ -1,9 +1,11 @@
 import http from 'node:http';
+import fs from 'node:fs';
 import baileys, {
   DisconnectReason,
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
-  fetchLatestBaileysVersion
+  fetchLatestBaileysVersion,
+  Browsers
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
@@ -80,9 +82,11 @@ async function startBot() {
   const { version } = await fetchLatestBaileysVersion();
   const logger = pino({ level: 'silent' });
 
+  // Usamos Browsers.windows('Desktop') para identificarnos como WhatsApp Desktop oficial
   const sock = makeWASocket({
     version,
     logger,
+    browser: Browsers.windows('Desktop'),
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger)
@@ -108,14 +112,21 @@ async function startBot() {
 
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
 
-      console.log(`⚠️ Conexión cerrada (código: ${statusCode}). Reconectando: ${shouldReconnect}`);
+      console.log(`⚠️ Conexión cerrada (código: ${statusCode}). ¿Desvinculado?: ${isLoggedOut}`);
 
-      if (shouldReconnect) {
+      if (isLoggedOut) {
+        console.log('🔄 Sesión desvinculada por WhatsApp. Limpiando credenciales y generando nuevo QR en 3s...');
+        try {
+          fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        } catch (err) {
+          console.error('Error al limpiar auth_info:', err);
+        }
         setTimeout(startBot, 3000);
       } else {
-        console.log('❌ Sesión cerrada permanentemente. Eliminá la carpeta auth_info para volver a vincular.');
+        console.log('🔄 Reconectando socket en 3 segundos...');
+        setTimeout(startBot, 3000);
       }
     } else if (connection === 'open') {
       console.log('\n======================================================');
@@ -158,7 +169,6 @@ async function startBot() {
         (command === '/bot' && rawArgs.toLowerCase() === 'on') ||
         (command === '!bot' && rawArgs.toLowerCase() === 'on')
       ) {
-        // Si no es el dueño, falla silenciosamente sin responder nada para no delatar la existencia del bot
         if (!isOwner) {
           console.log(`🤫 [MODO SIGILO] Intento de activación no autorizado en ${chatId} ignorado en silencio.`);
           continue;
@@ -184,7 +194,6 @@ async function startBot() {
         (command === '/bot' && rawArgs.toLowerCase() === 'off') ||
         (command === '!bot' && rawArgs.toLowerCase() === 'off')
       ) {
-        // Si no es el dueño, falla silenciosamente
         if (!isOwner) {
           console.log(`🤫 [MODO SIGILO] Intento de desactivación no autorizado en ${chatId} ignorado en silencio.`);
           continue;
