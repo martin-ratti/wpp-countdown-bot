@@ -5,30 +5,93 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.resolve(__dirname, '../data');
-const FILE_PATH = path.join(DATA_DIR, 'events.json');
+const EVENTS_FILE = path.join(DATA_DIR, 'events.json');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
-// Asegurar directorio y archivo
+// Asegurar directorio y archivos base
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-if (!fs.existsSync(FILE_PATH)) {
-  fs.writeFileSync(FILE_PATH, JSON.stringify({}, null, 2), 'utf-8');
+if (!fs.existsSync(EVENTS_FILE)) {
+  fs.writeFileSync(EVENTS_FILE, JSON.stringify({}, null, 2), 'utf-8');
+}
+
+if (!fs.existsSync(SETTINGS_FILE)) {
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ activeChats: [] }, null, 2), 'utf-8');
+}
+
+/**
+ * Lee la configuración general (chats activados)
+ */
+export function getSettings() {
+  try {
+    const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return { activeChats: [] };
+  }
+}
+
+/**
+ * Guarda la configuración general
+ */
+export function saveSettings(settings) {
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf-8');
+}
+
+/**
+ * Verifica si un chat o grupo tiene el bot activado
+ * @param {string} chatId
+ * @returns {boolean}
+ */
+export function isChatActive(chatId) {
+  const settings = getSettings();
+  return Array.isArray(settings.activeChats) && settings.activeChats.includes(chatId);
+}
+
+/**
+ * Activa el bot en un chat o grupo (Solo permitido por el dueño)
+ * @param {string} chatId
+ * @returns {boolean}
+ */
+export function activateChat(chatId) {
+  const settings = getSettings();
+  if (!Array.isArray(settings.activeChats)) {
+    settings.activeChats = [];
+  }
+  if (!settings.activeChats.includes(chatId)) {
+    settings.activeChats.push(chatId);
+    saveSettings(settings);
+    return true;
+  }
+  return false; // Ya estaba activo
+}
+
+/**
+ * Desactiva el bot en un chat o grupo
+ * @param {string} chatId
+ * @returns {boolean}
+ */
+export function deactivateChat(chatId) {
+  const settings = getSettings();
+  if (!Array.isArray(settings.activeChats)) return false;
+
+  const initialLen = settings.activeChats.length;
+  settings.activeChats = settings.activeChats.filter((id) => id !== chatId);
+  saveSettings(settings);
+  return settings.activeChats.length < initialLen;
 }
 
 /**
  * Normaliza los eventos asegurando que siempre sean un array ordenado por fecha
- * @param {Array | Object} raw
- * @returns {Array<{ id: number, name: string, targetIso: string, formattedDate: string, setBy?: string, createdAt: string }>}
  */
 function normalizeEventsList(raw) {
   if (!raw) return [];
   const list = Array.isArray(raw) ? raw : [raw];
 
-  // Ordenar por fecha cronológica ascendente
   list.sort((a, b) => new Date(a.targetIso).getTime() - new Date(b.targetIso).getTime());
 
-  // Asignar IDs secuenciales (1, 2, 3...)
   return list.map((evt, idx) => ({
     ...evt,
     id: idx + 1
@@ -40,7 +103,7 @@ function normalizeEventsList(raw) {
  */
 export function getAllData() {
   try {
-    const raw = fs.readFileSync(FILE_PATH, 'utf-8');
+    const raw = fs.readFileSync(EVENTS_FILE, 'utf-8');
     return JSON.parse(raw);
   } catch (error) {
     console.error('Error al leer events.json:', error);
@@ -52,7 +115,7 @@ export function getAllData() {
  * Guarda los datos en disco
  */
 export function saveData(data) {
-  fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  fs.writeFileSync(EVENTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
 
 /**
@@ -66,8 +129,6 @@ export function getEvents(chatId) {
 
 /**
  * Agrega un nuevo evento al grupo y reordena la lista por fecha
- * @param {string} chatId
- * @param {{ name: string, targetIso: string, formattedDate: string, setBy?: string }} eventData
  */
 export function addEvent(chatId, eventData) {
   const data = getAllData();
@@ -82,22 +143,18 @@ export function addEvent(chatId, eventData) {
   data[chatId] = updatedList;
   saveData(data);
 
-  // Retorna el evento recién agregado con su nuevo ID
   const saved = updatedList.find((e) => e.targetIso === eventData.targetIso && e.name === eventData.name) || updatedList[updatedList.length - 1];
   return { event: saved, total: updatedList.length };
 }
 
 /**
  * Busca un evento por índice/número o por texto del nombre
- * @param {string} chatId
- * @param {string} [query]
  */
 export function findEvent(chatId, query) {
   const events = getEvents(chatId);
   if (events.length === 0) return null;
 
   if (!query || query.trim() === '') {
-    // Si no se especifica búsqueda, devuelve el próximo evento futuro más cercano
     const now = Date.now();
     const upcoming = events.find((e) => new Date(e.targetIso).getTime() >= now);
     return upcoming || events[0];
@@ -106,21 +163,16 @@ export function findEvent(chatId, query) {
   const q = query.trim();
   const num = parseInt(q, 10);
 
-  // Búsqueda por número (#1, #2...)
   if (!isNaN(num) && num > 0) {
     return events.find((e) => e.id === num) || null;
   }
 
-  // Búsqueda por coincidencia de nombre (insensible a mayúsculas/minúsculas)
   const lower = q.toLowerCase();
   return events.find((e) => e.name.toLowerCase().includes(lower)) || null;
 }
 
 /**
  * Elimina un evento específico (por ID o nombre)
- * @param {string} chatId
- * @param {string} query
- * @returns {{ success: boolean, removed?: object, remainingCount: number }}
  */
 export function removeEvent(chatId, query) {
   const data = getAllData();
@@ -147,7 +199,6 @@ export function removeEvent(chatId, query) {
 
 /**
  * Elimina todos los eventos de un grupo
- * @param {string} chatId
  */
 export function clearAllEvents(chatId) {
   const data = getAllData();

@@ -1,10 +1,22 @@
 # ⏳ Bot de WhatsApp para Cuenta Regresiva (`/temp`)
 
-Bot de WhatsApp en Node.js que permite configurar múltiples eventos y calcular cuentas regresivas precisas en grupos o chats privados.
+Bot de WhatsApp en Node.js que permite configurar múltiples eventos y calcular cuentas regresivas precisas en grupos o chats privados con control de acceso por Dueño.
 
 ---
 
-## 🚀 Comandos Disponibles
+## 🔒 Control de Acceso (Solo el Dueño)
+
+Para proteger tu privacidad y evitar que el bot responda en grupos no deseados o mensajes privados aleatorios, el bot opera con una **Lista Blanca (Whitelist)**:
+
+- Por defecto, el bot **no responde a ningún comando** en un chat hasta que el dueño lo active.
+- **`/activar`** o **`/bot on`**: Solo el número del dueño puede ejecutar este comando en el grupo/chat para encender el bot.
+- **`/desactivar`** o **`/bot off`**: Desactiva el bot en ese chat.
+- Si alguien que no es el dueño intenta usar `/activar`, el bot deniega el acceso.
+- Si un grupo no está activado, el bot se mantiene 100% invisible y en silencio.
+
+---
+
+## 🚀 Comandos Disponibles (En Chats Activados)
 
 | Comando | Ejemplo | Descripción |
 | :--- | :--- | :--- |
@@ -17,39 +29,14 @@ Bot de WhatsApp en Node.js que permite configurar múltiples eventos y calcular 
 | `/cleartemp` | `/cleartemp` | Elimina **todos** los eventos del grupo actual. |
 | `/ayuda` | `/ayuda` | Muestra la guía interactiva completa de comandos en el chat. |
 
-> 🛡️ **Seguridad:** Cooldown anti-spam de 3 segundos por chat y límite de 80 caracteres por evento para evitar saturaciones.
-
 ---
 
 ## ☁️ Despliegue 24/7 en Render (100% Gratuito)
 
-Este proyecto está configurado para desplegarse como un **Free Web Service** en Render:
-
-1. Entrá a [Render.com](https://render.com) e iniciá sesión con tu cuenta de GitHub.
-2. Hacé clic en **"New +"** (arriba a la derecha) y seleccioná **"Web Service"**.
-3. Conectá el repositorio **`martin-ratti/wpp-countdown-bot`**.
-4. Completá los campos:
-   - **Name:** `wpp-countdown-bot`
-   - **Runtime:** `Node`
-   - **Build Command:** `npm install -g pnpm && pnpm install --frozen-lockfile`
-   - **Start Command:** `pnpm start`
-   - **Plan:** `Free`
-5. Hacé clic en **"Create Web Service"**.
-6. En la pestaña **"Logs"** de Render, verás aparecer el **código QR**.
-7. En tu teléfono, abrí WhatsApp > **Dispositivos vinculados** > **Vincular un dispositivo** y escaneá el QR desde la pantalla.
-8. ¡Listo! El bot quedará conectado y respondiendo en tus grupos 24/7.
-
----
-
-## 💻 Ejecutarlo Localmente en tu PC
-
-```bash
-# 1. Instalar dependencias
-pnpm install
-
-# 2. Iniciar el bot
-pnpm start
-
-# 3. Correr pruebas
-pnpm test
-```
+1. En [Render.com](https://render.com), creá un **Web Service** conectado a `martin-ratti/wpp-countdown-bot`.
+2. Esperá a que termine el build y en la pestaña **Logs** escaneá el **código QR** desde WhatsApp.
+3. Entrá al grupo donde quieras usarlo y enviá:
+   ```text
+   /activar
+   ```
+4. ¡Listo! A partir de ese momento tus amigos ya pueden usar `/temp` y `/eventos` en ese grupo.

@@ -11,7 +11,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseEventInput, buildTempResponse, buildEventsListResponse } from './countdown.js';
-import { getEvents, addEvent, findEvent, removeEvent, clearAllEvents } from './storage.js';
+import {
+  getEvents,
+  addEvent,
+  findEvent,
+  removeEvent,
+  clearAllEvents,
+  isChatActive,
+  activateChat,
+  deactivateChat
+} from './storage.js';
 
 const makeWASocket = baileys.default || baileys;
 const __filename = fileURLToPath(import.meta.url);
@@ -112,7 +121,7 @@ async function startBot() {
       console.log('\n======================================================');
       console.log('✅ ¡BOT CONECTADO CON ÉXITO A WHATSAPP!');
       console.log('Esperando comandos en chats y grupos...');
-      console.log('Comandos listos: /temp, /eventos, /set, /deltemp, /cleartemp, /ayuda');
+      console.log('Control de activación: /activar o /bot on (Solo dueño)');
       console.log('======================================================\n');
     }
   });
@@ -134,7 +143,76 @@ async function startBot() {
       const command = commandRaw.toLowerCase();
       const rawArgs = text.slice(commandRaw.length).trim();
 
-      // Control de Anti-Spam / Rate-Limiting por chat
+      // Identificar si el remitente es el dueño del bot (el teléfono vinculado)
+      const sender = msg.key.participant || msg.key.remoteJid;
+      const botNumber = sock.user?.id ? sock.user.id.split(':')[0] : null;
+      const isOwner = Boolean(
+        msg.key.fromMe ||
+        (botNumber && sender.startsWith(botNumber))
+      );
+
+      // 1. COMANDOS DE ACTIVACIÓN / CONTROL DE ACCESO (Exclusivo para el Dueño)
+      if (
+        command === '/activar' ||
+        command === '!activar' ||
+        (command === '/bot' && rawArgs.toLowerCase() === 'on') ||
+        (command === '!bot' && rawArgs.toLowerCase() === 'on')
+      ) {
+        if (!isOwner) {
+          await sock.sendMessage(
+            chatId,
+            { text: '⚠️ *Acceso denegado.* Solo el dueño del bot puede activar este chat.' },
+            { quoted: msg }
+          );
+          console.log(`⛔ [ACCESO DENEGADO] Intento de activación no autorizado en ${chatId}`);
+          continue;
+        }
+
+        activateChat(chatId);
+        const reply =
+          `🟢 *¡Bot de Cuenta Regresiva ACTIVADO en este chat!* 🎉\n\n` +
+          `A partir de ahora cualquier participante puede usar los comandos:\n` +
+          `• */temp* - Ver cuánto falta para el próximo evento\n` +
+          `• */eventos* - Ver la lista de eventos\n` +
+          `• */set DD/MM/AAAA HH:mm Nombre* - Registrar un evento\n` +
+          `• */ayuda* - Ver todos los comandos disponibles\n\n` +
+          `_(Para desactivarlo en cualquier momento, el dueño puede enviar /desactivar)_`;
+        await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
+        console.log(`✅ [ACTIVADO] Chat ${chatId} activado por el dueño.`);
+        continue;
+      }
+
+      if (
+        command === '/desactivar' ||
+        command === '!desactivar' ||
+        (command === '/bot' && rawArgs.toLowerCase() === 'off') ||
+        (command === '!bot' && rawArgs.toLowerCase() === 'off')
+      ) {
+        if (!isOwner) {
+          await sock.sendMessage(
+            chatId,
+            { text: '⚠️ *Acceso denegado.* Solo el dueño del bot puede desactivar este chat.' },
+            { quoted: msg }
+          );
+          console.log(`⛔ [ACCESO DENEGADO] Intento de desactivación no autorizado en ${chatId}`);
+          continue;
+        }
+
+        deactivateChat(chatId);
+        const reply = `🔴 *Bot desactivado en este chat.* Ya no responderá a ningún comando aquí a menos que el dueño lo vuelva a activar con */activar*.`;
+        await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
+        console.log(`🛑 [DESACTIVADO] Chat ${chatId} desactivado por el dueño.`);
+        continue;
+      }
+
+      // FILTRO DE SEGURIDAD / WHITELIST:
+      // Si el chat NO fue activado previamente por el dueño, ignorar silenciosamente
+      if (!isChatActive(chatId)) {
+        console.log(`🔒 [IGNORADO] Chat ${chatId} no está activado. Comando "${command}" descartado.`);
+        continue;
+      }
+
+      // Control de Anti-Spam / Rate-Limiting por chat activado
       const now = Date.now();
       const lastTime = lastCommandTime.get(chatId) || 0;
       if (now - lastTime < COOLDOWN_MS) {
@@ -143,11 +221,11 @@ async function startBot() {
       }
       lastCommandTime.set(chatId, now);
 
-      const senderType = msg.key.fromMe ? 'Vos' : 'Otro usuario';
+      const senderType = isOwner ? 'Dueño (Vos)' : 'Participante';
       console.log(`\n📩 [MENSAJE RECIBIDO] de: ${senderType} | Chat: ${chatId}`);
       console.log(`   Comando: "${command}" | Args: "${rawArgs}"`);
 
-      // 1. Comando /temp [número o nombre opcional]
+      // 2. Comando /temp [número o nombre opcional]
       if (command === '/temp' || command === '!temp') {
         const events = getEvents(chatId);
         const event = findEvent(chatId, rawArgs);
@@ -168,7 +246,7 @@ async function startBot() {
         continue;
       }
 
-      // 2. Comando /eventos o /events (Lista completa de eventos)
+      // 3. Comando /eventos o /events (Lista completa de eventos)
       if (command === '/eventos' || command === '!eventos' || command === '/events' || command === '!events') {
         const events = getEvents(chatId);
         const replyText = buildEventsListResponse(events);
@@ -177,7 +255,7 @@ async function startBot() {
         continue;
       }
 
-      // 3. Comando /set (Agregar nuevo evento)
+      // 4. Comando /set (Agregar nuevo evento)
       if (command === '/set' || command === '!set') {
         if (!rawArgs) {
           const helpMsg =
@@ -200,7 +278,6 @@ async function startBot() {
           continue;
         }
 
-        const sender = msg.key.participant || msg.key.remoteJid;
         const { event: saved, total } = addEvent(chatId, {
           name: parseResult.name,
           targetIso: parseResult.targetIso,
@@ -221,7 +298,7 @@ async function startBot() {
         continue;
       }
 
-      // 4. Comando /deltemp [número o nombre] (Eliminar evento específico)
+      // 5. Comando /deltemp [número o nombre] (Eliminar evento específico)
       if (command === '/deltemp' || command === '!deltemp') {
         if (!rawArgs) {
           await sock.sendMessage(
@@ -250,7 +327,7 @@ async function startBot() {
         continue;
       }
 
-      // 5. Comando /cleartemp (Eliminar todos los eventos del grupo)
+      // 6. Comando /cleartemp (Eliminar todos los eventos del grupo)
       if (command === '/cleartemp' || command === '!cleartemp') {
         const removed = clearAllEvents(chatId);
         if (removed) {
@@ -270,7 +347,7 @@ async function startBot() {
         continue;
       }
 
-      // 6. Comando /ayuda o /help (Menú de ayuda completo y actualizado)
+      // 7. Comando /ayuda o /help (Menú de ayuda completo y actualizado)
       if (command === '/ayuda' || command === '!ayuda' || command === '/help' || command === '!help') {
         const helpText =
           `🤖 *BOT DE CUENTA REGRESIVA - GUÍA DE COMANDOS*\n\n` +
@@ -290,10 +367,12 @@ async function startBot() {
           `   _Ej: /deltemp 1  o  /deltemp Lucas_\n\n` +
           `🗑️ */cleartemp*\n` +
           `   _Elimina todos los eventos del grupo actual._\n\n` +
+          `⚙️ */desactivar* (Solo dueño)\n` +
+          `   _Desactiva el bot en este chat._\n\n` +
           `🛡️ _Protección anti-spam: Cooldown de 3 segundos entre comandos._`;
 
         await sock.sendMessage(chatId, { text: helpText }, { quoted: msg });
-        console.log(`📤 [RESPUESTA] Menú de ayuda actualizado enviado.`);
+        console.log(`📤 [RESPUESTA] Menú de ayuda enviado.`);
         continue;
       }
     }
