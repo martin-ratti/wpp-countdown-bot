@@ -6,6 +6,7 @@ services:
     region: oregon
     buildCommand: npm install -g pnpm && pnpm config set minimum-release-age 0 && pnpm install
     startCommand: pnpm start
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production

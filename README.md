@@ -74,20 +74,30 @@ Para proteger tu privacidad y evitar que el bot responda en grupos no deseados o
 1. Hacé un Fork de este repositorio a tu cuenta de GitHub.
 2. En [Render.com](https://render.com), creá un nuevo **Web Service**.
 3. Conectá **tu repositorio forkeado** (`<tu-usuario>/wpp-countdown-bot`).
-4. Render detectará automáticamente la configuración o podés indicar:
+4. Render detectará automáticamente el archivo `render.yaml` o podés indicar:
    - **Runtime:** Node
    - **Build Command:** `npm install -g pnpm && pnpm config set minimum-release-age 0 && pnpm install`
    - **Start Command:** `pnpm start`
-5. En la pestaña **Logs** de Render, escaneá el **código QR** desde WhatsApp.
-6. Entrá a tu grupo y enviá `/activar`.
+   - **Health Check Path:** `/health`
+5. **Escanear el código QR fácilmente:**
+   - Una vez desplegado, abrí la URL de tu servicio (`https://tu-servicio.onrender.com`).
+   - Verás un **Dashboard Web interactivo** con el código QR vectorizado y nítido para escanear en un segundo con WhatsApp (sin sufrir la deformación de caracteres de la consola de logs).
+6. Entrá a tu grupo de WhatsApp y enviá `/activar`.
 
-### Opción B: Railway / Docker (Recomendado para persistencia)
-El proyecto incluye un `Dockerfile` con volúmenes definidos en `/app/auth_info` y `/app/data` para que no pierdas la sesión ni los eventos al reiniciar el contenedor:
+> ⚠️ **Nota sobre el plan gratuito de Render:**  
+> Render Free entra en suspensión (spin-down) tras 15 minutos sin peticiones HTTP entrantes y su disco es efímero. Para evitar que se duerma, podés configurar un monitor gratuito como [UptimeRobot](https://uptimerobot.com) o [cron-job.org](https://cron-job.org) para que haga un ping cada 10 minutos a tu endpoint `https://tu-servicio.onrender.com/health`.
+
+### Opción B: Railway / Docker / VPS (Recomendado para persistencia 24/7)
+Para un bot de WhatsApp 24/7 sin suspensiones y con disco persistente para no perder nunca las credenciales de sesión:
+- **Railway:** Simplemente desplegá el repo. Railway utiliza el `Dockerfile` y no suspende el contenedor mientras tengas créditos.
+- **Docker / Servidor propio / VPS:**
+El proyecto incluye un `Dockerfile` con volúmenes definidos en `/app/auth_info` y `/app/data` para que no pierdas la sesión ni los eventos al reiniciar:
 
 ```bash
 docker build -t wpp-countdown-bot .
-docker run -d --name mi-bot -v ./auth_info:/app/auth_info -v ./data:/app/data wpp-countdown-bot
+docker run -d --name mi-bot -p 3000:3000 -v ./auth_info:/app/auth_info -v ./data:/app/data wpp-countdown-bot
 ```
+Luego abrís `http://localhost:3000` en tu navegador para ver y escanear el QR.
 
 ---
 

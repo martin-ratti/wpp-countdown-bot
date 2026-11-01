@@ -84,3 +84,10 @@ test('storage: soporte completo para múltiples eventos por grupo', () => {
   clearAllEvents(testChat);
   assert.equal(getEvents(testChat).length, 0);
 });
+
+test('QRCode: genera SVG válido para visualización web', async () => {
+  const QRCode = (await import('qrcode')).default;
+  const svg = await QRCode.toString('whatsapp-test-qr', { type: 'svg' });
+  assert.match(svg, /<svg/);
+  assert.match(svg, /<\/svg>/);
+});

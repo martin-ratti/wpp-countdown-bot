@@ -8,7 +8,8 @@ import baileys, {
   Browsers
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
-import qrcode from 'qrcode-terminal';
+import qrcodeTerminal from 'qrcode-terminal';
+import QRCode from 'qrcode';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,14 +30,198 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const AUTH_DIR = path.resolve(__dirname, '../auth_info');
 
-// Servidor HTTP ligero para compatibilidad con el tier gratuito de Render (Web Service)
+// Estado global de la conexión del bot
+let botState = 'connecting'; // 'connecting' | 'qr_ready' | 'connected' | 'disconnected'
+let currentQrSvg = null;
+let connectedUser = null;
+
+// Servidor HTTP con dashboard web para escaneo visual de QR y verificación de salud
 const PORT = process.env.PORT || 3000;
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('🤖 Bot de WhatsApp Cuenta Regresiva activo y funcionando.');
+  const url = req.url?.split('?')[0] || '/';
+
+  // Endpoint de verificación de salud para Render / Railway / UptimeRobot
+  if (url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(
+      JSON.stringify({
+        status: 'ok',
+        state: botState,
+        connectedUser: connectedUser || null,
+        uptime: Math.floor(process.uptime())
+      })
+    );
+  }
+
+  // Dashboard Web interactivo y visualizador de QR en tiempo real
+  if (url === '/' || url === '/qr') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+
+    let bodyContent = '';
+    let autoRefresh = '<meta http-equiv="refresh" content="5">';
+
+    if (botState === 'connected') {
+      autoRefresh = '<meta http-equiv="refresh" content="30">';
+      bodyContent = `
+        <div class="card status-connected">
+          <div class="icon">✅</div>
+          <h1>Bot Conectado con Éxito</h1>
+          <p class="subtitle">El bot está activo y conectado a WhatsApp.</p>
+          <div class="badge success">🟢 En línea: +${connectedUser}</div>
+          <div class="info-box">
+            <h3>⚙️ Modo Sigilo Activo:</h3>
+            <p>Para activar el bot en cualquier grupo o chat privado, enviá como dueño:</p>
+            <code>/activar</code> o <code>/bot on</code>
+          </div>
+        </div>
+      `;
+    } else if (botState === 'qr_ready' && currentQrSvg) {
+      autoRefresh = '<meta http-equiv="refresh" content="5">';
+      bodyContent = `
+        <div class="card">
+          <div class="icon">📱</div>
+          <h1>Vincular WhatsApp</h1>
+          <p class="subtitle">Escaneá este código QR con la app de WhatsApp en tu teléfono:</p>
+          <ol class="steps">
+            <li>Abrí <strong>WhatsApp</strong> en tu teléfono</li>
+            <li>Andá a <strong>Dispositivos vinculados</strong> &gt; <strong>Vincular un dispositivo</strong></li>
+            <li>Apuntá tu cámara a este código QR:</li>
+          </ol>
+          <div class="qr-container">
+            ${currentQrSvg}
+          </div>
+          <p class="refresh-hint">🔄 El código se actualiza automáticamente cada 20 segundos.</p>
+        </div>
+      `;
+    } else {
+      autoRefresh = '<meta http-equiv="refresh" content="3">';
+      bodyContent = `
+        <div class="card">
+          <div class="icon">🔄</div>
+          <h1>Iniciando Conexión...</h1>
+          <p class="subtitle">Preparando cliente de WhatsApp. Generando código QR...</p>
+          <div class="spinner"></div>
+          <p class="refresh-hint">Esta página se actualizará automáticamente en unos segundos.</p>
+        </div>
+      `;
+    }
+
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  ${autoRefresh}
+  <title>Bot de WhatsApp - Cuenta Regresiva</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #25d366;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      max-width: 480px;
+      width: 100%;
+      padding: 32px 24px;
+      text-align: center;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    }
+    .icon { font-size: 44px; margin-bottom: 12px; }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 8px; color: #fff; }
+    .subtitle { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; line-height: 1.5; }
+    .steps {
+      text-align: left;
+      font-size: 13px;
+      color: var(--text-muted);
+      margin: 0 auto 20px;
+      padding-left: 20px;
+      line-height: 1.6;
+    }
+    .steps strong { color: var(--text); }
+    .qr-container {
+      background: #ffffff;
+      padding: 16px;
+      border-radius: 12px;
+      display: inline-block;
+      margin: 10px auto;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    .qr-container svg {
+      display: block;
+      width: 260px;
+      height: 260px;
+    }
+    .refresh-hint { font-size: 12px; color: var(--text-muted); margin-top: 14px; }
+    .badge {
+      display: inline-block;
+      padding: 8px 16px;
+      border-radius: 9999px;
+      font-size: 14px;
+      font-weight: 600;
+      margin: 16px 0;
+    }
+    .badge.success { background: rgba(37, 211, 102, 0.15); color: #25d366; border: 1px solid rgba(37, 211, 102, 0.3); }
+    .info-box {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      text-align: left;
+      font-size: 13px;
+      margin-top: 16px;
+    }
+    .info-box h3 { font-size: 13px; margin-bottom: 6px; color: var(--primary); }
+    .info-box code {
+      background: #334155;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      color: #38bdf8;
+    }
+    .spinner {
+      border: 4px solid rgba(255,255,255,0.1);
+      border-top: 4px solid var(--primary);
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 24px auto;
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  ${bodyContent}
+</body>
+</html>`;
+
+    return res.end(html);
+  }
+
+  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('Ruta no encontrada');
 });
-server.listen(PORT, () => {
-  console.log(`🌐 Servidor de monitoreo activo en el puerto ${PORT}`);
+
+// Enlazar explícitamente a 0.0.0.0 para que Render, Railway y Docker detecten el puerto
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🌐 Servidor web y de monitoreo activo en http://0.0.0.0:${PORT}`);
 });
 
 // Rate limiting anti-spam (3 segundos de cooldown por chat)
@@ -99,18 +284,32 @@ async function startBot() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', (update) => {
+  sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      botState = 'qr_ready';
+      try {
+        currentQrSvg = await QRCode.toString(qr, {
+          type: 'svg',
+          margin: 2,
+          width: 280
+        });
+      } catch (err) {
+        console.error('Error generando SVG de QR:', err);
+      }
+
       console.log('\n======================================================');
       console.log('📱 ESCANEÁ ESTE CÓDIGO QR CON WHATSAPP EN TU TELÉFONO');
       console.log('(WhatsApp > Dispositivos vinculados > Vincular un dispositivo)');
+      console.log(`🌐 O escanealo directamente en la web abriendo: http://localhost:${PORT}`);
       console.log('======================================================\n');
-      qrcode.generate(qr, { small: true });
+      qrcodeTerminal.generate(qr, { small: true });
     }
 
     if (connection === 'close') {
+      botState = 'disconnected';
+      currentQrSvg = null;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const isLoggedOut = statusCode === DisconnectReason.loggedOut;
 
@@ -129,8 +328,12 @@ async function startBot() {
         setTimeout(startBot, 3000);
       }
     } else if (connection === 'open') {
+      botState = 'connected';
+      currentQrSvg = null;
+      connectedUser = sock.user?.id ? sock.user.id.split(':')[0] : 'Desconocido';
+
       console.log('\n======================================================');
-      console.log('✅ ¡BOT CONECTADO CON ÉXITO A WHATSAPP!');
+      console.log(`✅ ¡BOT CONECTADO CON ÉXITO A WHATSAPP! (+${connectedUser})`);
       console.log('Esperando comandos en chats y grupos...');
       console.log('Modo Sigilo activo: /activar o /bot on (Solo el dueño)');
       console.log('======================================================\n');
@@ -381,14 +584,19 @@ async function startBot() {
 }
 
 // Cierre graceful
-process.on('SIGTERM', () => {
-  console.log('Recibida señal SIGTERM. Apagando bot limpiamente...');
-  process.exit(0);
-});
-process.on('SIGINT', () => {
-  console.log('Recibida señal SIGINT. Apagando bot limpiamente...');
-  process.exit(0);
-});
+let isShuttingDown = false;
+const handleShutdown = (signal) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`Recibida señal ${signal}. Apagando bot limpiamente...`);
+  server.close(() => {
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 3000);
+};
+
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+process.on('SIGINT', () => handleShutdown('SIGINT'));
 
 // Iniciar el bot
 startBot().catch((err) => {
