@@ -40,8 +40,8 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer((req, res) => {
   const url = req.url?.split('?')[0] || '/';
 
-  // Endpoint de verificación de salud para Render / Railway / UptimeRobot
-  if (url === '/health') {
+  // Endpoint de verificación de salud para Render / Railway / UptimeRobot (soporta /health y /healt)
+  if (url === '/health' || url === '/healt') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     return res.end(
       JSON.stringify({
