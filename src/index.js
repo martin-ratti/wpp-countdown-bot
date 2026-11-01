@@ -267,11 +267,11 @@ async function startBot() {
   const { version } = await fetchLatestBaileysVersion();
   const logger = pino({ level: 'silent' });
 
-  // Usamos Browsers.windows('Desktop') para identificarnos como WhatsApp Desktop oficial
+  // Identificación en WhatsApp: Nombre "Bor" e icono de navegador Chrome
   const sock = makeWASocket({
     version,
     logger,
-    browser: Browsers.windows('Desktop'),
+    browser: ['Bor', 'Chrome', '1.0.0'],
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger)
