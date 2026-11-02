@@ -18,18 +18,18 @@ if (!fs.existsSync(EVENTS_FILE)) {
 }
 
 if (!fs.existsSync(SETTINGS_FILE)) {
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ activeChats: [] }, null, 2), 'utf-8');
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ activeChats: [], botPaused: false }, null, 2), 'utf-8');
 }
 
 /**
- * Lee la configuración general (chats activados)
+ * Lee la configuración general (chats activados, estado de pausa)
  */
 export function getSettings() {
   try {
     const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
     return JSON.parse(raw);
   } catch {
-    return { activeChats: [] };
+    return { activeChats: [], botPaused: false };
   }
 }
 
@@ -38,6 +38,25 @@ export function getSettings() {
  */
 export function saveSettings(settings) {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf-8');
+}
+
+/**
+ * Verifica si el bot se encuentra en pausa manual
+ * @returns {boolean}
+ */
+export function isBotPaused() {
+  const settings = getSettings();
+  return Boolean(settings.botPaused);
+}
+
+/**
+ * Actualiza el estado de pausa del bot
+ * @param {boolean} paused
+ */
+export function setBotPaused(paused) {
+  const settings = getSettings();
+  settings.botPaused = Boolean(paused);
+  saveSettings(settings);
 }
 
 /**

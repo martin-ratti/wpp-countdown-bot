@@ -62,6 +62,7 @@ Para proteger tu privacidad y evitar que el bot responda en grupos no deseados o
 | `/set` (sin hora) | `/set 01/01/2027 Año Nuevo` | Si no indicás la hora, asume automáticamente las `00:00 hs`. |
 | `/deltemp` | `/deltemp 1` o `/deltemp Lucas` | Elimina un evento específico de la lista. |
 | `/cleartemp` | `/cleartemp` | Elimina **todos** los eventos del grupo actual. |
+| `/pausar` | `/pausar` | *(Solo Dueño)* Pausa y desconecta el bot de WhatsApp por completo. |
 | `/ayuda` | `/ayuda` | Muestra la guía interactiva completa de comandos en el chat. |
 
 > 🛡️ **Anti-Spam:** Cuenta con un tiempo de enfriamiento (cooldown) de 3 segundos por chat entre comandos.
@@ -98,6 +99,32 @@ docker build -t wpp-countdown-bot .
 docker run -d --name mi-bot -p 3000:3000 -v ./auth_info:/app/auth_info -v ./data:/app/data wpp-countdown-bot
 ```
 Luego abrís `http://localhost:3000` en tu navegador para ver y escanear el QR.
+
+---
+
+## 🛑 Control de Encendido, Pausa y Monitoreo (Evitar "En línea" / Silenciado)
+
+### 🔕 ¿Por qué WhatsApp puede silenciar notificaciones o mostrarte "En línea"?
+Al vincular una sesión de WhatsApp Web o bot, si la librería marca la presencia como activa (`available`), los servidores de WhatsApp asumen que estás usando la aplicación en la computadora y silencian las notificaciones en el teléfono móvil para evitar duplicaciones.
+**Este proyecto ya incluye protección automática:**
+- `markOnlineOnConnect: false` configurado por defecto.
+- Presencia reportada automáticamente en modo `unavailable` (offline / segundo plano).
+- Tu teléfono **siempre recibirá y sonará las notificaciones con normalidad**, y tus contactos no te verán "En línea" cuando no estés usando el celular.
+
+### ⏸️ Cómo pausar o apagar el bot fácilmente cuando no lo uses:
+
+1. **Desde el Dashboard Web (Recomendado):**
+   - Abrí la URL de tu servicio (`https://tu-servicio.onrender.com`).
+   - Tocá el botón rojo **"⏸️ Pausar Bot (Desconectar WhatsApp)"**.
+   - La conexión con WhatsApp se cierra al instante. Para volver a encenderlo, simplemente tocá **"▶️ Reanudar Bot"** (no requiere volver a escanear QR).
+
+2. **Desde WhatsApp:**
+   - Como dueño, enviá el comando `/pausar` en cualquier chat o grupo donde esté el bot.
+   - El bot se despedirá y cerrará la conexión inmediatamente.
+
+3. **Cómo apagar Render o el Monitoreo (Para que entre en reposo total):**
+   - **Pausar Monitoreo (UptimeRobot / Cron-job.org):** Si usás UptimeRobot, simplemente pausá el monitor desde su app móvil o web. Al no recibir más pings en `/health`, el plan gratuito de Render entrará en reposo automáticamente tras 15 minutos sin consumir horas.
+   - **Suspender el servicio en Render:** Entrá a [dashboard.render.com](https://dashboard.render.com) > tu servicio y hacé clic en **"Suspend Service"** para apagar el contenedor por completo. Cuando quieras volver a activarlo, hacé clic en **"Resume Service"**.
 
 ---
 

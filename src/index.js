@@ -22,7 +22,9 @@ import {
   clearAllEvents,
   isChatActive,
   activateChat,
-  deactivateChat
+  deactivateChat,
+  isBotPaused,
+  setBotPaused
 } from './storage.js';
 
 const makeWASocket = baileys.default || baileys;
@@ -31,12 +33,68 @@ const __dirname = path.dirname(__filename);
 const AUTH_DIR = path.resolve(__dirname, '../auth_info');
 
 // Estado global de la conexión del bot
-let botState = 'connecting'; // 'connecting' | 'qr_ready' | 'connected' | 'disconnected'
+let currentSock = null;
+let reconnectTimer = null;
+let isPaused = isBotPaused();
+let botState = isPaused ? 'paused' : 'connecting'; // 'connecting' | 'qr_ready' | 'connected' | 'disconnected' | 'paused'
 let currentQrSvg = null;
 let connectedUser = null;
 
 // Servidor HTTP con dashboard web para escaneo visual de QR y verificación de salud
 const PORT = process.env.PORT || 3000;
+
+/**
+ * Pausa el bot y desconecta el cliente de WhatsApp limpiamente
+ */
+function pauseBot() {
+  isPaused = true;
+  setBotPaused(true);
+  botState = 'paused';
+  currentQrSvg = null;
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  if (currentSock) {
+    try {
+      currentSock.ev.removeAllListeners();
+      currentSock.end(undefined);
+    } catch (err) {
+      console.error('Error cerrando socket de WhatsApp:', err);
+    }
+    currentSock = null;
+  }
+
+  console.log('\n======================================================');
+  console.log('⏸️ [BOT PAUSADO] Socket de WhatsApp cerrado correctamente.');
+  console.log('La cuenta ya no figura conectada en segundo plano.');
+  console.log('======================================================\n');
+}
+
+/**
+ * Reanuda el bot y reconecta a WhatsApp
+ */
+function resumeBot() {
+  if (!isPaused && (botState === 'connected' || botState === 'connecting')) {
+    console.log('ℹ️ El bot ya está activo o conectándose.');
+    return;
+  }
+
+  isPaused = false;
+  setBotPaused(false);
+  botState = 'connecting';
+
+  console.log('\n======================================================');
+  console.log('▶️ [BOT REANUDADO] Reanudando cliente de WhatsApp...');
+  console.log('======================================================\n');
+
+  startBot().catch((err) => {
+    console.error('Error al reanudar el bot:', err);
+  });
+}
+
 const server = http.createServer((req, res) => {
   const url = req.url?.split('?')[0] || '/';
 
@@ -47,10 +105,32 @@ const server = http.createServer((req, res) => {
       JSON.stringify({
         status: 'ok',
         state: botState,
+        paused: isPaused,
         connectedUser: connectedUser || null,
         uptime: Math.floor(process.uptime())
       })
     );
+  }
+
+  // Endpoints para Pausar / Reanudar el bot (vía GET, POST o API)
+  if (url === '/pause' || url === '/api/pause') {
+    pauseBot();
+    if (req.headers.accept?.includes('application/json') || url.startsWith('/api')) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ status: 'ok', message: 'Bot pausado y desconectado', state: botState, paused: isPaused }));
+    }
+    res.writeHead(302, { Location: '/' });
+    return res.end();
+  }
+
+  if (url === '/resume' || url === '/api/resume') {
+    resumeBot();
+    if (req.headers.accept?.includes('application/json') || url.startsWith('/api')) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ status: 'ok', message: 'Bot reanudando conexión', state: botState, paused: isPaused }));
+    }
+    res.writeHead(302, { Location: '/' });
+    return res.end();
   }
 
   // Dashboard Web interactivo y visualizador de QR en tiempo real
@@ -60,18 +140,39 @@ const server = http.createServer((req, res) => {
     let bodyContent = '';
     let autoRefresh = '<meta http-equiv="refresh" content="5">';
 
-    if (botState === 'connected') {
+    if (botState === 'paused') {
+      autoRefresh = '';
+      bodyContent = `
+        <div class="card status-paused">
+          <div class="icon">⏸️</div>
+          <h1>Bot en Pausa</h1>
+          <p class="subtitle">La conexión de WhatsApp está totalmente cerrada. No aparecés en línea y tu celular recibe las notificaciones con sonido normalmente.</p>
+          <div class="badge paused">⏸️ Estado: Desconectado / Pausado</div>
+          <form action="/resume" method="POST" style="margin: 18px 0 10px;">
+            <button type="submit" class="btn btn-primary">▶️ Reanudar Bot</button>
+          </form>
+          <div class="info-box">
+            <h3>💡 Opciones de Apagado y Monitoreo:</h3>
+            <p>• <strong>Sesión a salvo:</strong> Al reanudar, el bot se conectará de inmediato sin pedir QR.</p>
+            <p style="margin-top: 6px;">• <strong>Apagar Render por completo:</strong> En <a href="https://dashboard.render.com" target="_blank" style="color: #38bdf8; text-decoration: underline;">dashboard.render.com</a> tocá <em>Suspend Service</em> o pausá tu monitor (UptimeRobot) para que entre en reposo tras 15 minutos.</p>
+          </div>
+        </div>
+      `;
+    } else if (botState === 'connected') {
       autoRefresh = '<meta http-equiv="refresh" content="30">';
       bodyContent = `
         <div class="card status-connected">
           <div class="icon">✅</div>
           <h1>Bot Conectado con Éxito</h1>
-          <p class="subtitle">El bot está activo y conectado a WhatsApp.</p>
+          <p class="subtitle">El bot está activo y en segundo plano silencioso (sin alterar tu estado "En línea" ni silenciar notificaciones del celular).</p>
           <div class="badge success">🟢 En línea: +${connectedUser}</div>
+          <form action="/pause" method="POST" style="margin: 18px 0 10px;">
+            <button type="submit" class="btn btn-danger" onclick="return confirm('¿Pausar y desconectar el bot de WhatsApp?');">⏸️ Pausar Bot (Desconectar)</button>
+          </form>
           <div class="info-box">
-            <h3>⚙️ Modo Sigilo Activo:</h3>
-            <p>Para activar el bot en cualquier grupo o chat privado, enviá como dueño:</p>
-            <code>/activar</code> o <code>/bot on</code>
+            <h3>⚙️ Modo Sigilo y Comandos de Dueño:</h3>
+            <p>• Activar en un chat: <code>/activar</code></p>
+            <p style="margin-top: 6px;">• Pausar desde WhatsApp: <code>/pausar</code></p>
           </div>
         </div>
       `;
@@ -91,6 +192,9 @@ const server = http.createServer((req, res) => {
             ${currentQrSvg}
           </div>
           <p class="refresh-hint">🔄 El código se actualiza automáticamente cada 20 segundos.</p>
+          <form action="/pause" method="POST" style="margin-top: 18px;">
+            <button type="submit" class="btn btn-secondary">⏸️ Pausar Bot</button>
+          </form>
         </div>
       `;
     } else {
@@ -102,6 +206,9 @@ const server = http.createServer((req, res) => {
           <p class="subtitle">Preparando cliente de WhatsApp. Generando código QR...</p>
           <div class="spinner"></div>
           <p class="refresh-hint">Esta página se actualizará automáticamente en unos segundos.</p>
+          <form action="/pause" method="POST" style="margin-top: 18px;">
+            <button type="submit" class="btn btn-secondary">⏸️ Pausar Bot</button>
+          </form>
         </div>
       `;
     }
@@ -178,6 +285,46 @@ const server = http.createServer((req, res) => {
       margin: 16px 0;
     }
     .badge.success { background: rgba(37, 211, 102, 0.15); color: #25d366; border: 1px solid rgba(37, 211, 102, 0.3); }
+    .badge.paused { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 24px;
+      font-size: 15px;
+      font-weight: 600;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-decoration: none;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 12px -2px rgba(0, 0, 0, 0.3);
+    }
+    .btn-primary {
+      background: #25d366;
+      color: #0f172a;
+    }
+    .btn-primary:hover {
+      background: #1eb857;
+    }
+    .btn-danger {
+      background: #ef4444;
+      color: #ffffff;
+    }
+    .btn-danger:hover {
+      background: #dc2626;
+    }
+    .btn-secondary {
+      background: #334155;
+      color: #f8fafc;
+    }
+    .btn-secondary:hover {
+      background: #475569;
+    }
     .info-box {
       background: #0f172a;
       border: 1px solid var(--border);
@@ -263,6 +410,26 @@ function getMessageText(rawMessage) {
  * Función principal de conexión del bot
  */
 async function startBot() {
+  if (isPaused) {
+    botState = 'paused';
+    return;
+  }
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  if (currentSock) {
+    try {
+      currentSock.ev.removeAllListeners();
+      currentSock.end(undefined);
+    } catch {
+      // Ignorar
+    }
+    currentSock = null;
+  }
+
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
   const logger = pino({ level: 'silent' });
@@ -276,11 +443,14 @@ async function startBot() {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger)
     },
+    markOnlineOnConnect: false, // ¡Crucial! Evita figurar "En línea" al conectar
     printQRInTerminal: false,
     syncFullHistory: false,
     generateHighQualityLinkPreview: false,
     getMessage: async () => ({ conversation: '' })
   });
+
+  currentSock = sock;
 
   sock.ev.on('creds.update', saveCreds);
 
@@ -308,6 +478,12 @@ async function startBot() {
     }
 
     if (connection === 'close') {
+      if (isPaused) {
+        botState = 'paused';
+        currentQrSvg = null;
+        return;
+      }
+
       botState = 'disconnected';
       currentQrSvg = null;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -322,18 +498,26 @@ async function startBot() {
         } catch (err) {
           console.error('Error al limpiar auth_info:', err);
         }
-        setTimeout(startBot, 3000);
+        reconnectTimer = setTimeout(startBot, 3000);
       } else {
         console.log('🔄 Reconectando socket en 3 segundos...');
-        setTimeout(startBot, 3000);
+        reconnectTimer = setTimeout(startBot, 3000);
       }
     } else if (connection === 'open') {
       botState = 'connected';
       currentQrSvg = null;
       connectedUser = sock.user?.id ? sock.user.id.split(':')[0] : 'Desconocido';
 
+      // Asegurar que WhatsApp no muestre al usuario en línea para que suenen las notificaciones del celular
+      try {
+        await sock.sendPresenceUpdate('unavailable');
+      } catch (err) {
+        // Silencioso si falla
+      }
+
       console.log('\n======================================================');
       console.log(`✅ ¡BOT CONECTADO CON ÉXITO A WHATSAPP! (+${connectedUser})`);
+      console.log('Modo Silencioso / Sigilo: Presencia offline (las notificaciones suenan normalmente en tu celular)');
       console.log('Esperando comandos en chats y grupos...');
       console.log('Modo Sigilo activo: /activar o /bot on (Solo el dueño)');
       console.log('======================================================\n');
@@ -406,6 +590,32 @@ async function startBot() {
         const reply = `🔴 *Bot desactivado en este chat.* Ya no responderá a ningún comando aquí a menos que el dueño lo vuelva a activar con */activar*.`;
         await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
         console.log(`🛑 [DESACTIVADO] Chat ${chatId} desactivado por el dueño.`);
+        continue;
+      }
+
+      if (
+        command === '/pausar' ||
+        command === '!pausar' ||
+        (command === '/bot' && (rawArgs.toLowerCase() === 'pausa' || rawArgs.toLowerCase() === 'pause' || rawArgs.toLowerCase() === 'dormir'))
+      ) {
+        if (!isOwner) {
+          console.log(`🤫 [MODO SIGILO] Intento de pausar bot no autorizado en ${chatId} ignorado en silencio.`);
+          continue;
+        }
+
+        const dashboardUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+        const reply =
+          `⏸️ *¡Bot pausado y desconectado de WhatsApp!* 📴\n\n` +
+          `• La conexión de WhatsApp se cerró correctamente: ya no figurarás en línea y las notificaciones sonarán en tu celular normalmente.\n` +
+          `• Todos tus eventos y configuraciones siguen guardados intactos.\n\n` +
+          `💡 Para volver a encenderlo cuando quieras, abrí el Dashboard Web y tocá *Reanudar Bot*:\n` +
+          `👉 ${dashboardUrl}`;
+
+        await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
+        console.log(`🛑 [PAUSA REMOTA] Bot pausado desde WhatsApp por el dueño.`);
+        setTimeout(() => {
+          pauseBot();
+        }, 1200);
         continue;
       }
 
@@ -572,7 +782,9 @@ async function startBot() {
           `🗑️ */cleartemp*\n` +
           `   _Elimina todos los eventos del grupo actual._\n\n` +
           `⚙️ */desactivar* (Solo dueño)\n` +
-          `   _Desactiva el bot en este chat._\n\n` +
+          `   _Desactiva el bot en este chat específico._\n\n` +
+          `⏸️ */pausar* (Solo dueño)\n` +
+          `   _Pausa y desconecta el bot de WhatsApp por completo._\n\n` +
           `🛡️ _Protección anti-spam: Cooldown de 3 segundos entre comandos._`;
 
         await sock.sendMessage(chatId, { text: helpText }, { quoted: msg });
@@ -589,6 +801,21 @@ const handleShutdown = (signal) => {
   if (isShuttingDown) return;
   isShuttingDown = true;
   console.log(`Recibida señal ${signal}. Apagando bot limpiamente...`);
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  if (currentSock) {
+    try {
+      currentSock.ev.removeAllListeners();
+      currentSock.end(undefined);
+    } catch {
+      // Ignorar
+    }
+  }
+
   server.close(() => {
     process.exit(0);
   });
@@ -598,7 +825,14 @@ const handleShutdown = (signal) => {
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 process.on('SIGINT', () => handleShutdown('SIGINT'));
 
-// Iniciar el bot
-startBot().catch((err) => {
-  console.error('Error fatal al iniciar el bot:', err);
-});
+// Iniciar el bot solo si no se encuentra pausado
+if (!isPaused) {
+  startBot().catch((err) => {
+    console.error('Error fatal al iniciar el bot:', err);
+  });
+} else {
+  console.log('\n======================================================');
+  console.log('⏸️ [INICIO] El bot inició en estado PAUSADO según configuración.');
+  console.log(`🌐 Podés reanudarlo cuando quieras desde http://0.0.0.0:${PORT}`);
+  console.log('======================================================\n');
+}

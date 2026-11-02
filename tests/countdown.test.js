@@ -15,7 +15,9 @@ import {
   clearAllEvents,
   isChatActive,
   activateChat,
-  deactivateChat
+  deactivateChat,
+  isBotPaused,
+  setBotPaused
 } from '../src/storage.js';
 
 test('parseEventInput: valida formato correcto y rechaza más de 80 caracteres', () => {
@@ -90,4 +92,15 @@ test('QRCode: genera SVG válido para visualización web', async () => {
   const svg = await QRCode.toString('whatsapp-test-qr', { type: 'svg' });
   assert.match(svg, /<svg/);
   assert.match(svg, /<\/svg>/);
+});
+
+test('storage: estado de pausa del bot (isBotPaused / setBotPaused)', () => {
+  setBotPaused(false);
+  assert.equal(isBotPaused(), false);
+
+  setBotPaused(true);
+  assert.equal(isBotPaused(), true);
+
+  setBotPaused(false);
+  assert.equal(isBotPaused(), false);
 });
